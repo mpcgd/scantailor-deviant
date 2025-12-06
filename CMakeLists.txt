@@ -105,9 +105,11 @@ SET(CMAKE_AUTOUIC ON)
 
 SET(Qt_MIN_VERSION 5.7.0)
 IF(APPLE)
-   # hardcoded path to Qt5CoreConfig.cmake etc. [truf]
-   # Also set Homebrew Qt5 path if available
-   LIST(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/Cellar/qt@5/5.15.18/lib/cmake")
+   # Find Homebrew Qt5 installations
+   FILE(GLOB QT5_CELLAR_PATHS "/opt/homebrew/Cellar/qt@5/*/lib/cmake")
+   FOREACH(QT5_PATH ${QT5_CELLAR_PATHS})
+      LIST(APPEND CMAKE_PREFIX_PATH ${QT5_PATH})
+   ENDFOREACH()
    LIST(APPEND CMAKE_PREFIX_PATH "/Users/robert/build/Qt/5.8/clang_64/")
 ENDIF(APPLE)
 FIND_PACKAGE(Qt5Core ${Qt_MIN_VERSION} REQUIRED)
@@ -153,7 +155,11 @@ IF(WIN32)
         ADD_DEFINITIONS(-DUSE_LIBTIFF_DLL)
 ENDIF()
 
-LIST(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/Cellar/eigen/5.0.1/share/eigen3/cmake")
+# Find Homebrew Eigen installations
+FILE(GLOB EIGEN_CELLAR_PATHS "/opt/homebrew/Cellar/eigen/*/share/eigen3/cmake")
+FOREACH(EIGEN_PATH ${EIGEN_CELLAR_PATHS})
+   LIST(APPEND CMAKE_PREFIX_PATH ${EIGEN_PATH})
+ENDFOREACH()
 FIND_PACKAGE(Eigen3 REQUIRED)
 INCLUDE_DIRECTORIES(SYSTEM ${EIGEN3_INCLUDE_DIR})
 ADD_COMPILE_OPTIONS(-DEIGEN_MPL2_ONLY)
