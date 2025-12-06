@@ -11,7 +11,7 @@ SET(
         "${CMAKE_SOURCE_DIR}/cmake/default_cxxflags.cmake"
 )
 
-SET(CMAKE_CXX_STANDARD 11)
+SET(CMAKE_CXX_STANDARD 14)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 IF(MSVC)
@@ -107,7 +107,7 @@ SET(Qt_MIN_VERSION 5.7.0)
 IF(APPLE)
    # hardcoded path to Qt5CoreConfig.cmake etc. [truf]
    # Also set Homebrew Qt5 path if available
-   LIST(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/Cellar/qt@5/5.15.17/lib/cmake")
+   LIST(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/Cellar/qt@5/5.15.18/lib/cmake")
    LIST(APPEND CMAKE_PREFIX_PATH "/Users/robert/build/Qt/5.8/clang_64/")
 ENDIF(APPLE)
 FIND_PACKAGE(Qt5Core ${Qt_MIN_VERSION} REQUIRED)
@@ -153,6 +153,7 @@ IF(WIN32)
         ADD_DEFINITIONS(-DUSE_LIBTIFF_DLL)
 ENDIF()
 
+LIST(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/Cellar/eigen/5.0.1/share/eigen3/cmake")
 FIND_PACKAGE(Eigen3 REQUIRED)
 INCLUDE_DIRECTORIES(SYSTEM ${EIGEN3_INCLUDE_DIR})
 ADD_COMPILE_OPTIONS(-DEIGEN_MPL2_ONLY)
