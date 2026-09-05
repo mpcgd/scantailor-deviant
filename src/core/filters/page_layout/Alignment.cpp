@@ -44,7 +44,7 @@ Alignment::Alignment(Vertical vert, Horizontal hor, bool is_null, double toleran
 
 Alignment::Alignment(QDomElement const& el)
 {
-    CommandLine cli = CommandLine::get();
+    CommandLine const& cli = CommandLine::get();
     m_isNull = cli.getDefaultNull();
 
     QString const vert(el.attribute("vert"));
@@ -95,7 +95,7 @@ Alignment::load(QSettings* _settings)
     QSettings& settings = *_settings;
     Vertical vert = strToVertical(settings.value(_key_alignment_default_alig_vert, verticalToStr(Vertical::VCENTER)).toString());
     Horizontal hor = strToHorizontal(settings.value(_key_alignment_default_alig_hor, horizontalToStr(Horizontal::HCENTER)).toString());
-    CommandLine cli = CommandLine::get();
+    CommandLine const& cli = CommandLine::get();
 
     bool isnull = cli.getDefaultNull();
     /* read in cli.getDefaultNull(); */
