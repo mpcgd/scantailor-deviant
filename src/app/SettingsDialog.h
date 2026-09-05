@@ -23,6 +23,7 @@
 #include "settings/hotkeysmanager.h"
 #include "filters/page_layout/Alignment.h"
 #include "settings/ini_keys.h"
+#include "imageproc/UpscalingMethod.h"
 #include <QDialog>
 #include <QInputDialog>
 
@@ -76,6 +77,8 @@ private slots:
     void on_rectangularAreasSensitivityValue_valueChanged(int arg1);
 
     void on_originalPageDisplayOnKeyHold_clicked(bool checked);
+
+    void on_upscalingMethodValue_currentIndexChanged(int index);
 
     void on_lblHotKeyManager_linkActivated(const QString& link);
 
@@ -166,6 +169,8 @@ private slots:
 private:
     void initLanguageList(QString cur_lang);
     void loadTiffList();
+    void loadUpscalingMethod();
+    void setUpscalingMethodHint(imageproc::UpscalingMethod method);
     void populateTreeWidget(QTreeWidget* treeWidget);
     void setupItem(QTreeWidgetItem* item, QWidget* w = nullptr, QString s = "", bool default_val = true);
     void backupSettings();

@@ -528,17 +528,6 @@ p, li { white-space: pre-wrap; }&lt;/style&gt;&lt;/head&gt;&lt;body&gt;
               </property>
              </widget>
             </item>
-            <item>
-             <widget class="QCheckBox" name="originalPageDisplayOnKeyHold">
-              <property name="text">
-               <string>Hold spacebar to display original page</string>
-              </property>
-             </widget>
-            </item>
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
            </layout>
           </widget>
          </widget>
@@ -3456,6 +3445,90 @@ Unlike the other stages, the &quot;Output&quot; stage becomes available only aft
             <widget class="QCheckBox" name="originalPageDisplayOnKeyHold">
              <property name="text">
               <string>Hold spacebar to display original page</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="upscalingMethodLayout">
+             <item>
+              <widget class="QLabel" name="upscalingMethodLabel">
+               <property name="text">
+                <string>Upscaling interpolation:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_Upscaling">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QComboBox" name="upscalingMethodValue">
+               <item>
+                <property name="text">
+                 <string>Bicubic (Catmull-Rom) [Default]</string>
+                </property>
+                <property name="data">
+                 <string>bicubic</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Bicubic (Mitchell-Netravali)</string>
+                </property>
+                <property name="data">
+                 <string>mitchell</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Bilinear</string>
+                </property>
+                <property name="data">
+                 <string>bilinear</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Box (Legacy)</string>
+                </property>
+                <property name="data">
+                 <string>box</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QLabel" name="upscalingMethodHint">
+             <property name="text">
+              <string>Interpolation used when the output resolution is higher than the input document (e.g. 600 DPI output from a 300 DPI scan).
+
+Bicubic (Catmull-Rom): best for text, sheet music, line art, and high-contrast scanned documents. Delivers sharp edges and smooth continuous curves without blurring.
+
+Bicubic (Mitchell-Netravali): best for continuous-tone photographs, art prints, and illustrations. Provides an optimal balance between sharpness, smooth gradation, and ringing artifact suppression.
+
+Bilinear: lightweight, fast linear interpolation; useful when processing speed is prioritized over sharpness.
+
+Box (Legacy): preserves the original pixel grid (nearest-neighbor block appearance); for backward compatibility with classic Scan Tailor output.</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignTop</set>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+             <property name="textInteractionFlags">
+              <set>Qt::LinksAccessibleByMouse|Qt::TextSelectableByKeyboard|Qt::TextSelectableByMouse</set>
              </property>
             </widget>
            </item>

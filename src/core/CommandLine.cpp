@@ -292,7 +292,7 @@ CommandLine::setup()
     m_defaultNull = fetchDefaultNull();
     m_upscalingMethod = fetchUpscalingMethod();
     if (!m_upscalingMethod.isEmpty()) {
-        imageproc::setDefaultUpscalingMethod(imageproc::upscalingMethodFromString(m_upscalingMethod.toStdString()));
+        imageproc::setDefaultUpscalingMethod(imageproc::upscalingMethodFromString(m_upscalingMethod));
     }
 
     QRegularExpression exp("^.*(tif|tiff|jpg|jpeg|bmp|gif|png|pbm|pgm|ppm|xbm|xpm|pdf)$", QRegularExpression::CaseInsensitiveOption);

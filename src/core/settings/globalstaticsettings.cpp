@@ -204,7 +204,7 @@ void GlobalStaticSettings::updateSettings()
     }
     m_output_copy_icc_metadata = settings.value(_key_output_metadata_copy_icc, _key_output_metadata_copy_icc_def).toBool();
     m_upscaling_method = settings.value(_key_output_upscaling_method, _key_output_upscaling_method_def).toString();
-    imageproc::setDefaultUpscalingMethod(imageproc::upscalingMethodFromString(m_upscaling_method.toStdString()));
+    imageproc::setDefaultUpscalingMethod(imageproc::upscalingMethodFromString(m_upscaling_method));
 
     m_highlightColorAdjustment = 100 + settings.value(_key_thumbnails_non_focused_selection_highlight_color_adj, _key_thumbnails_non_focused_selection_highlight_color_adj_def).toInt();
 

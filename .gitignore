@@ -16,3 +16,4 @@ build-*/
 samples/
 
 .DS_Store
+build_tests/

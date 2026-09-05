@@ -21,6 +21,7 @@
 #include "OpenGLSupport.h"
 #include "config.h"
 #include "imageproc/Constants.h"
+#include "imageproc/UpscalingMethod.h"
 #include <QVariant>
 #include <QDir>
 #include <QDebug>
@@ -109,6 +110,59 @@ void SettingsDialog::initLanguageList(QString cur_lang)
     }
 
     ui.language->setEnabled(ui.language->count() > 0);
+}
+
+void SettingsDialog::loadUpscalingMethod()
+{
+    QString const cur = m_settings.value(
+                            _key_output_upscaling_method, _key_output_upscaling_method_def
+                        ).toString();
+
+    ui.upscalingMethodValue->blockSignals(true);
+    int idx = ui.upscalingMethodValue->findData(cur);
+    if (idx < 0) {
+        idx = ui.upscalingMethodValue->findData(QString(_key_output_upscaling_method_def));
+        if (idx < 0) {
+            idx = 0;
+        }
+    }
+    ui.upscalingMethodValue->setCurrentIndex(idx);
+    ui.upscalingMethodValue->blockSignals(false);
+
+    setUpscalingMethodHint(imageproc::upscalingMethodFromString(cur));
+}
+
+void SettingsDialog::setUpscalingMethodHint(imageproc::UpscalingMethod method)
+{
+    switch (method) {
+    case imageproc::UPSCALING_BICUBIC_MITCHELL:
+        ui.upscalingMethodHint->setText(
+            tr("Best for continuous-tone photographs, art prints, and illustrations. "
+               "Provides an optimal balance between sharpness, smooth gradation, "
+               "and ringing artifact suppression.")
+        );
+        break;
+    case imageproc::UPSCALING_BILINEAR:
+        ui.upscalingMethodHint->setText(
+            tr("Lightweight, fast linear interpolation; useful when processing speed "
+               "is prioritized over sharpness.")
+        );
+        break;
+    case imageproc::UPSCALING_BOX:
+        ui.upscalingMethodHint->setText(
+            tr("Preserves the original pixel grid (nearest-neighbor block appearance); "
+               "for backward compatibility with classic Scan Tailor output.")
+        );
+        break;
+    case imageproc::UPSCALING_BICUBIC_CATMULL_ROM:
+    case imageproc::UPSCALING_AUTO:
+    default:
+        ui.upscalingMethodHint->setText(
+            tr("Best for text, sheet music, line art, and high-contrast scanned documents. "
+               "Delivers sharp edges and smooth continuous curves without blurring.")
+        );
+        break;
+    }
 }
 
 void SettingsDialog::backupSettings()
@@ -530,6 +584,8 @@ void SettingsDialog::on_stackedWidget_currentChanged(int /*arg1*/)
         connect(ui.ThresholdMaxValue, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, &SettingsDialog::onThresholdValueChanged);
 
         ui.originalPageDisplayOnKeyHold->setChecked(m_settings.value(_key_output_show_orig_on_space, _key_output_show_orig_on_space_def).toBool());
+
+        loadUpscalingMethod();
     } else if (currentPage == ui.pageDespeckling) {
         QComboBox* cb = ui.despecklingDefaultsValue;
         cb->blockSignals(true);
@@ -789,6 +845,17 @@ void SettingsDialog::on_rectangularAreasSensitivityValue_valueChanged(int arg1)
 void SettingsDialog::on_originalPageDisplayOnKeyHold_clicked(bool checked)
 {
     m_settings.setValue(_key_output_show_orig_on_space, checked);
+}
+
+void SettingsDialog::on_upscalingMethodValue_currentIndexChanged(int index)
+{
+    QString const method = ui.upscalingMethodValue->itemData(index).toString();
+    m_settings.setValue(_key_output_upscaling_method, method);
+
+    imageproc::UpscalingMethod const m = imageproc::upscalingMethodFromString(method);
+    imageproc::setDefaultUpscalingMethod(m);
+    GlobalStaticSettings::m_upscaling_method = method;
+    setUpscalingMethodHint(m);
 }
 
 void SettingsDialog::on_lblHotKeyManager_linkActivated(const QString& link)
