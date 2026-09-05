@@ -398,12 +398,668 @@ static void transformGeneric(
     }
 }
 
+struct CatmullRomWeights {
+    inline void operator()(float u, float& w_m1, float& w_0, float& w_1, float& w_2) const
+    {
+        float const u2 = u * u;
+        float const u3 = u2 * u;
+        w_m1 = -0.5f * u3 + u2 - 0.5f * u;
+        w_0  =  1.5f * u3 - 2.5f * u2 + 1.0f;
+        w_1  = -1.5f * u3 + 2.0f * u2 + 0.5f * u;
+        w_2  =  0.5f * u3 - 0.5f * u2;
+    }
+};
+
+struct MitchellWeights {
+    inline void operator()(float u, float& w_m1, float& w_0, float& w_1, float& w_2) const
+    {
+        float const u2 = u * u;
+        float const u3 = u2 * u;
+        float const inv18 = 1.0f / 18.0f;
+        w_m1 = (-7.0f * u3 + 15.0f * u2 - 9.0f * u + 1.0f) * inv18;
+        w_0  = ( 21.0f * u3 - 36.0f * u2 + 16.0f) * inv18;
+        w_1  = (-21.0f * u3 + 27.0f * u2 + 9.0f * u + 1.0f) * inv18;
+        w_2  = (  7.0f * u3 -  6.0f * u2) * inv18;
+    }
+};
+
+template<typename WeightCalculator>
+static void transformBicubicGray(
+    uint8_t const* const src_data, int const src_stride, QSize const src_size,
+    uint8_t* const dst_data, int const dst_stride,
+    QTransform const& inv_xform, QRect const& dst_rect,
+    uint8_t const outside_color, int const outside_flags)
+{
+    int const sw = src_size.width();
+    int const sh = src_size.height();
+    int const dw = dst_rect.width();
+    int const dh = dst_rect.height();
+    WeightCalculator calc_weights;
+
+    #pragma omp parallel for schedule(static) shared(inv_xform)
+    for (int dy = 0; dy < dh; ++dy) {
+        uint8_t* dst_line = dst_data + dy * dst_stride;
+        double const f_dy_center = dy + 0.5;
+        double const f_sx_base = f_dy_center * inv_xform.m21() + inv_xform.dx();
+        double const f_sy_base = f_dy_center * inv_xform.m22() + inv_xform.dy();
+
+        for (int dx = 0; dx < dw; ++dx) {
+            double const f_dx_center = dx + 0.5;
+            double const sx = f_sx_base + f_dx_center * inv_xform.m11();
+            double const sy = f_sy_base + f_dx_center * inv_xform.m12();
+
+            double const x_prime = sx - 0.5;
+            double const y_prime = sy - 0.5;
+
+            int const x0 = (int)std::floor(x_prime);
+            int const y0 = (int)std::floor(y_prime);
+
+            if (x0 < -2 || x0 >= sw + 1 || y0 < -2 || y0 >= sh + 1) {
+                if (outside_flags & OutsidePixels::COLOR) {
+                    dst_line[dx] = outside_color;
+                } else {
+                    int const cx = qBound(0, x0, sw - 1);
+                    int const cy = qBound(0, y0, sh - 1);
+                    dst_line[dx] = src_data[cy * src_stride + cx];
+                }
+                continue;
+            }
+
+            float const u = (float)(x_prime - x0);
+            float const v = (float)(y_prime - y0);
+
+            float wx_m1, wx_0, wx_1, wx_2;
+            calc_weights(u, wx_m1, wx_0, wx_1, wx_2);
+
+            float wy_m1, wy_0, wy_1, wy_2;
+            calc_weights(v, wy_m1, wy_0, wy_1, wy_2);
+
+            if (x0 >= 1 && x0 + 2 < sw && y0 >= 1 && y0 + 2 < sh) {
+                uint8_t const* p_row_m1 = src_data + (y0 - 1) * src_stride + (x0 - 1);
+                uint8_t const* p_row_0  = p_row_m1 + src_stride;
+                uint8_t const* p_row_1  = p_row_0 + src_stride;
+                uint8_t const* p_row_2  = p_row_1 + src_stride;
+
+                float const r_m1 = wx_m1 * p_row_m1[0] + wx_0 * p_row_m1[1] + wx_1 * p_row_m1[2] + wx_2 * p_row_m1[3];
+                float const r_0  = wx_m1 * p_row_0[0]  + wx_0 * p_row_0[1]  + wx_1 * p_row_0[2]  + wx_2 * p_row_0[3];
+                float const r_1  = wx_m1 * p_row_1[0]  + wx_0 * p_row_1[1]  + wx_1 * p_row_1[2]  + wx_2 * p_row_1[3];
+                float const r_2  = wx_m1 * p_row_2[0]  + wx_0 * p_row_2[1]  + wx_1 * p_row_2[2]  + wx_2 * p_row_2[3];
+
+                float const val = wy_m1 * r_m1 + wy_0 * r_0 + wy_1 * r_1 + wy_2 * r_2;
+                int const ival = (int)std::round(val);
+                dst_line[dx] = (uint8_t)qBound(0, ival, 255);
+            } else {
+                auto fetch = [&](int const x, int const y) -> float {
+                    if (x >= 0 && x < sw && y >= 0 && y < sh) {
+                        return (float)src_data[y * src_stride + x];
+                    }
+                    if (outside_flags & OutsidePixels::COLOR) {
+                        return (float)outside_color;
+                    }
+                    int const cx = qBound(0, x, sw - 1);
+                    int const cy = qBound(0, y, sh - 1);
+                    return (float)src_data[cy * src_stride + cx];
+                };
+
+                float const r_m1 = wx_m1 * fetch(x0 - 1, y0 - 1) + wx_0 * fetch(x0, y0 - 1) + wx_1 * fetch(x0 + 1, y0 - 1) + wx_2 * fetch(x0 + 2, y0 - 1);
+                float const r_0  = wx_m1 * fetch(x0 - 1, y0)     + wx_0 * fetch(x0, y0)     + wx_1 * fetch(x0 + 1, y0)     + wx_2 * fetch(x0 + 2, y0);
+                float const r_1  = wx_m1 * fetch(x0 - 1, y0 + 1) + wx_0 * fetch(x0, y0 + 1) + wx_1 * fetch(x0 + 1, y0 + 1) + wx_2 * fetch(x0 + 2, y0 + 1);
+                float const r_2  = wx_m1 * fetch(x0 - 1, y0 + 2) + wx_0 * fetch(x0, y0 + 2) + wx_1 * fetch(x0 + 1, y0 + 2) + wx_2 * fetch(x0 + 2, y0 + 2);
+
+                float const val = wy_m1 * r_m1 + wy_0 * r_0 + wy_1 * r_1 + wy_2 * r_2;
+                int const ival = (int)std::round(val);
+                dst_line[dx] = (uint8_t)qBound(0, ival, 255);
+            }
+        }
+    }
+}
+
+template<typename WeightCalculator>
+static void transformBicubicRGB32(
+    uint32_t const* const src_data, int const src_stride, QSize const src_size,
+    uint32_t* const dst_data, int const dst_stride,
+    QTransform const& inv_xform, QRect const& dst_rect,
+    uint32_t const outside_color, int const outside_flags)
+{
+    int const sw = src_size.width();
+    int const sh = src_size.height();
+    int const dw = dst_rect.width();
+    int const dh = dst_rect.height();
+    WeightCalculator calc_weights;
+
+    #pragma omp parallel for schedule(static) shared(inv_xform)
+    for (int dy = 0; dy < dh; ++dy) {
+        uint32_t* dst_line = dst_data + dy * dst_stride;
+        double const f_dy_center = dy + 0.5;
+        double const f_sx_base = f_dy_center * inv_xform.m21() + inv_xform.dx();
+        double const f_sy_base = f_dy_center * inv_xform.m22() + inv_xform.dy();
+
+        for (int dx = 0; dx < dw; ++dx) {
+            double const f_dx_center = dx + 0.5;
+            double const sx = f_sx_base + f_dx_center * inv_xform.m11();
+            double const sy = f_sy_base + f_dx_center * inv_xform.m12();
+
+            double const x_prime = sx - 0.5;
+            double const y_prime = sy - 0.5;
+
+            int const x0 = (int)std::floor(x_prime);
+            int const y0 = (int)std::floor(y_prime);
+
+            if (x0 < -2 || x0 >= sw + 1 || y0 < -2 || y0 >= sh + 1) {
+                if (outside_flags & OutsidePixels::COLOR) {
+                    dst_line[dx] = outside_color;
+                } else {
+                    int const cx = qBound(0, x0, sw - 1);
+                    int const cy = qBound(0, y0, sh - 1);
+                    dst_line[dx] = src_data[cy * src_stride + cx];
+                }
+                continue;
+            }
+
+            float const u = (float)(x_prime - x0);
+            float const v = (float)(y_prime - y0);
+
+            float wx_m1, wx_0, wx_1, wx_2;
+            calc_weights(u, wx_m1, wx_0, wx_1, wx_2);
+
+            float wy_m1, wy_0, wy_1, wy_2;
+            calc_weights(v, wy_m1, wy_0, wy_1, wy_2);
+
+            float r_final, g_final, b_final;
+
+            if (x0 >= 1 && x0 + 2 < sw && y0 >= 1 && y0 + 2 < sh) {
+                uint32_t const* p_row_m1 = src_data + (y0 - 1) * src_stride + (x0 - 1);
+                uint32_t const* p_row_0  = p_row_m1 + src_stride;
+                uint32_t const* p_row_1  = p_row_0 + src_stride;
+                uint32_t const* p_row_2  = p_row_1 + src_stride;
+
+                auto row_interp = [&](uint32_t const* p, float& r, float& g, float& b) {
+                    uint32_t const c0 = p[0], c1 = p[1], c2 = p[2], c3 = p[3];
+                    r = wx_m1 * ((c0 >> 16) & 0xFF) + wx_0 * ((c1 >> 16) & 0xFF) + wx_1 * ((c2 >> 16) & 0xFF) + wx_2 * ((c3 >> 16) & 0xFF);
+                    g = wx_m1 * ((c0 >> 8) & 0xFF)  + wx_0 * ((c1 >> 8) & 0xFF)  + wx_1 * ((c2 >> 8) & 0xFF)  + wx_2 * ((c3 >> 8) & 0xFF);
+                    b = wx_m1 * (c0 & 0xFF)         + wx_0 * (c1 & 0xFF)         + wx_1 * (c2 & 0xFF)         + wx_2 * (c3 & 0xFF);
+                };
+
+                float r_m1, g_m1, b_m1, r_0, g_0, b_0, r_1, g_1, b_1, r_2, g_2, b_2;
+                row_interp(p_row_m1, r_m1, g_m1, b_m1);
+                row_interp(p_row_0,  r_0,  g_0,  b_0);
+                row_interp(p_row_1,  r_1,  g_1,  b_1);
+                row_interp(p_row_2,  r_2,  g_2,  b_2);
+
+                r_final = wy_m1 * r_m1 + wy_0 * r_0 + wy_1 * r_1 + wy_2 * r_2;
+                g_final = wy_m1 * g_m1 + wy_0 * g_0 + wy_1 * g_1 + wy_2 * g_2;
+                b_final = wy_m1 * b_m1 + wy_0 * b_0 + wy_1 * b_1 + wy_2 * b_2;
+            } else {
+                auto fetch = [&](int const x, int const y) -> uint32_t {
+                    if (x >= 0 && x < sw && y >= 0 && y < sh) {
+                        return src_data[y * src_stride + x];
+                    }
+                    if (outside_flags & OutsidePixels::COLOR) {
+                        return outside_color;
+                    }
+                    int const cx = qBound(0, x, sw - 1);
+                    int const cy = qBound(0, y, sh - 1);
+                    return src_data[cy * src_stride + cx];
+                };
+
+                auto row_interp_safe = [&](int const y, float& r, float& g, float& b) {
+                    uint32_t const c0 = fetch(x0 - 1, y), c1 = fetch(x0, y), c2 = fetch(x0 + 1, y), c3 = fetch(x0 + 2, y);
+                    r = wx_m1 * ((c0 >> 16) & 0xFF) + wx_0 * ((c1 >> 16) & 0xFF) + wx_1 * ((c2 >> 16) & 0xFF) + wx_2 * ((c3 >> 16) & 0xFF);
+                    g = wx_m1 * ((c0 >> 8) & 0xFF)  + wx_0 * ((c1 >> 8) & 0xFF)  + wx_1 * ((c2 >> 8) & 0xFF)  + wx_2 * ((c3 >> 8) & 0xFF);
+                    b = wx_m1 * (c0 & 0xFF)         + wx_0 * (c1 & 0xFF)         + wx_1 * (c2 & 0xFF)         + wx_2 * (c3 & 0xFF);
+                };
+
+                float r_m1, g_m1, b_m1, r_0, g_0, b_0, r_1, g_1, b_1, r_2, g_2, b_2;
+                row_interp_safe(y0 - 1, r_m1, g_m1, b_m1);
+                row_interp_safe(y0,     r_0,  g_0,  b_0);
+                row_interp_safe(y0 + 1, r_1,  g_1,  b_1);
+                row_interp_safe(y0 + 2, r_2,  g_2,  b_2);
+
+                r_final = wy_m1 * r_m1 + wy_0 * r_0 + wy_1 * r_1 + wy_2 * r_2;
+                g_final = wy_m1 * g_m1 + wy_0 * g_0 + wy_1 * g_1 + wy_2 * g_2;
+                b_final = wy_m1 * b_m1 + wy_0 * b_0 + wy_1 * b_1 + wy_2 * b_2;
+            }
+
+            int const ir = qBound(0, (int)std::round(r_final), 255);
+            int const ig = qBound(0, (int)std::round(g_final), 255);
+            int const ib = qBound(0, (int)std::round(b_final), 255);
+            dst_line[dx] = 0xFF000000 | (ir << 16) | (ig << 8) | ib;
+        }
+    }
+}
+
+template<typename WeightCalculator>
+static void transformBicubicARGB32(
+    uint32_t const* const src_data, int const src_stride, QSize const src_size,
+    uint32_t* const dst_data, int const dst_stride,
+    QTransform const& inv_xform, QRect const& dst_rect,
+    uint32_t const outside_color, int const outside_flags)
+{
+    int const sw = src_size.width();
+    int const sh = src_size.height();
+    int const dw = dst_rect.width();
+    int const dh = dst_rect.height();
+    WeightCalculator calc_weights;
+
+    #pragma omp parallel for schedule(static) shared(inv_xform)
+    for (int dy = 0; dy < dh; ++dy) {
+        uint32_t* dst_line = dst_data + dy * dst_stride;
+        double const f_dy_center = dy + 0.5;
+        double const f_sx_base = f_dy_center * inv_xform.m21() + inv_xform.dx();
+        double const f_sy_base = f_dy_center * inv_xform.m22() + inv_xform.dy();
+
+        for (int dx = 0; dx < dw; ++dx) {
+            double const f_dx_center = dx + 0.5;
+            double const sx = f_sx_base + f_dx_center * inv_xform.m11();
+            double const sy = f_sy_base + f_dx_center * inv_xform.m12();
+
+            double const x_prime = sx - 0.5;
+            double const y_prime = sy - 0.5;
+
+            int const x0 = (int)std::floor(x_prime);
+            int const y0 = (int)std::floor(y_prime);
+
+            if (x0 < -2 || x0 >= sw + 1 || y0 < -2 || y0 >= sh + 1) {
+                if (outside_flags & OutsidePixels::COLOR) {
+                    dst_line[dx] = outside_color;
+                } else {
+                    int const cx = qBound(0, x0, sw - 1);
+                    int const cy = qBound(0, y0, sh - 1);
+                    dst_line[dx] = src_data[cy * src_stride + cx];
+                }
+                continue;
+            }
+
+            float const u = (float)(x_prime - x0);
+            float const v = (float)(y_prime - y0);
+
+            float wx_m1, wx_0, wx_1, wx_2;
+            calc_weights(u, wx_m1, wx_0, wx_1, wx_2);
+
+            float wy_m1, wy_0, wy_1, wy_2;
+            calc_weights(v, wy_m1, wy_0, wy_1, wy_2);
+
+            float a_final, r_final, g_final, b_final;
+
+            if (x0 >= 1 && x0 + 2 < sw && y0 >= 1 && y0 + 2 < sh) {
+                uint32_t const* p_row_m1 = src_data + (y0 - 1) * src_stride + (x0 - 1);
+                uint32_t const* p_row_0  = p_row_m1 + src_stride;
+                uint32_t const* p_row_1  = p_row_0 + src_stride;
+                uint32_t const* p_row_2  = p_row_1 + src_stride;
+
+                auto row_interp = [&](uint32_t const* p, float& a, float& r, float& g, float& b) {
+                    uint32_t const c0 = p[0], c1 = p[1], c2 = p[2], c3 = p[3];
+                    a = wx_m1 * ((c0 >> 24) & 0xFF) + wx_0 * ((c1 >> 24) & 0xFF) + wx_1 * ((c2 >> 24) & 0xFF) + wx_2 * ((c3 >> 24) & 0xFF);
+                    r = wx_m1 * ((c0 >> 16) & 0xFF) + wx_0 * ((c1 >> 16) & 0xFF) + wx_1 * ((c2 >> 16) & 0xFF) + wx_2 * ((c3 >> 16) & 0xFF);
+                    g = wx_m1 * ((c0 >> 8) & 0xFF)  + wx_0 * ((c1 >> 8) & 0xFF)  + wx_1 * ((c2 >> 8) & 0xFF)  + wx_2 * ((c3 >> 8) & 0xFF);
+                    b = wx_m1 * (c0 & 0xFF)         + wx_0 * (c1 & 0xFF)         + wx_1 * (c2 & 0xFF)         + wx_2 * (c3 & 0xFF);
+                };
+
+                float a_m1, r_m1, g_m1, b_m1, a_0, r_0, g_0, b_0, a_1, r_1, g_1, b_1, a_2, r_2, g_2, b_2;
+                row_interp(p_row_m1, a_m1, r_m1, g_m1, b_m1);
+                row_interp(p_row_0,  a_0,  r_0,  g_0,  b_0);
+                row_interp(p_row_1,  a_1,  r_1,  g_1,  b_1);
+                row_interp(p_row_2,  a_2,  r_2,  g_2,  b_2);
+
+                a_final = wy_m1 * a_m1 + wy_0 * a_0 + wy_1 * a_1 + wy_2 * a_2;
+                r_final = wy_m1 * r_m1 + wy_0 * r_0 + wy_1 * r_1 + wy_2 * r_2;
+                g_final = wy_m1 * g_m1 + wy_0 * g_0 + wy_1 * g_1 + wy_2 * g_2;
+                b_final = wy_m1 * b_m1 + wy_0 * b_0 + wy_1 * b_1 + wy_2 * b_2;
+            } else {
+                auto fetch = [&](int const x, int const y) -> uint32_t {
+                    if (x >= 0 && x < sw && y >= 0 && y < sh) {
+                        return src_data[y * src_stride + x];
+                    }
+                    if (outside_flags & OutsidePixels::COLOR) {
+                        return outside_color;
+                    }
+                    int const cx = qBound(0, x, sw - 1);
+                    int const cy = qBound(0, y, sh - 1);
+                    return src_data[cy * src_stride + cx];
+                };
+
+                auto row_interp_safe = [&](int const y, float& a, float& r, float& g, float& b) {
+                    uint32_t const c0 = fetch(x0 - 1, y), c1 = fetch(x0, y), c2 = fetch(x0 + 1, y), c3 = fetch(x0 + 2, y);
+                    a = wx_m1 * ((c0 >> 24) & 0xFF) + wx_0 * ((c1 >> 24) & 0xFF) + wx_1 * ((c2 >> 24) & 0xFF) + wx_2 * ((c3 >> 24) & 0xFF);
+                    r = wx_m1 * ((c0 >> 16) & 0xFF) + wx_0 * ((c1 >> 16) & 0xFF) + wx_1 * ((c2 >> 16) & 0xFF) + wx_2 * ((c3 >> 16) & 0xFF);
+                    g = wx_m1 * ((c0 >> 8) & 0xFF)  + wx_0 * ((c1 >> 8) & 0xFF)  + wx_1 * ((c2 >> 8) & 0xFF)  + wx_2 * ((c3 >> 8) & 0xFF);
+                    b = wx_m1 * (c0 & 0xFF)         + wx_0 * (c1 & 0xFF)         + wx_1 * (c2 & 0xFF)         + wx_2 * (c3 & 0xFF);
+                };
+
+                float a_m1, r_m1, g_m1, b_m1, a_0, r_0, g_0, b_0, a_1, r_1, g_1, b_1, a_2, r_2, g_2, b_2;
+                row_interp_safe(y0 - 1, a_m1, r_m1, g_m1, b_m1);
+                row_interp_safe(y0,     a_0,  r_0,  g_0,  b_0);
+                row_interp_safe(y0 + 1, a_1,  r_1,  g_1,  b_1);
+                row_interp_safe(y0 + 2, a_2,  r_2,  g_2,  b_2);
+
+                a_final = wy_m1 * a_m1 + wy_0 * a_0 + wy_1 * a_1 + wy_2 * a_2;
+                r_final = wy_m1 * r_m1 + wy_0 * r_0 + wy_1 * r_1 + wy_2 * r_2;
+                g_final = wy_m1 * g_m1 + wy_0 * g_0 + wy_1 * g_1 + wy_2 * g_2;
+                b_final = wy_m1 * b_m1 + wy_0 * b_0 + wy_1 * b_1 + wy_2 * b_2;
+            }
+
+            int const ia = qBound(0, (int)std::round(a_final), 255);
+            int const ir = qBound(0, (int)std::round(r_final), 255);
+            int const ig = qBound(0, (int)std::round(g_final), 255);
+            int const ib = qBound(0, (int)std::round(b_final), 255);
+            dst_line[dx] = (ia << 24) | (ir << 16) | (ig << 8) | ib;
+        }
+    }
+}
+
+static void transformBilinearGray(
+    uint8_t const* const src_data, int const src_stride, QSize const src_size,
+    uint8_t* const dst_data, int const dst_stride,
+    QTransform const& inv_xform, QRect const& dst_rect,
+    uint8_t const outside_color, int const outside_flags)
+{
+    int const sw = src_size.width();
+    int const sh = src_size.height();
+    int const dw = dst_rect.width();
+    int const dh = dst_rect.height();
+
+    #pragma omp parallel for schedule(static) shared(inv_xform)
+    for (int dy = 0; dy < dh; ++dy) {
+        uint8_t* dst_line = dst_data + dy * dst_stride;
+        double const f_dy_center = dy + 0.5;
+        double const f_sx_base = f_dy_center * inv_xform.m21() + inv_xform.dx();
+        double const f_sy_base = f_dy_center * inv_xform.m22() + inv_xform.dy();
+
+        for (int dx = 0; dx < dw; ++dx) {
+            double const f_dx_center = dx + 0.5;
+            double const sx = f_sx_base + f_dx_center * inv_xform.m11();
+            double const sy = f_sy_base + f_dx_center * inv_xform.m12();
+
+            double const x_prime = sx - 0.5;
+            double const y_prime = sy - 0.5;
+
+            int const x0 = (int)std::floor(x_prime);
+            int const y0 = (int)std::floor(y_prime);
+
+            if (x0 < -1 || x0 >= sw || y0 < -1 || y0 >= sh) {
+                if (outside_flags & OutsidePixels::COLOR) {
+                    dst_line[dx] = outside_color;
+                } else {
+                    int const cx = qBound(0, x0, sw - 1);
+                    int const cy = qBound(0, y0, sh - 1);
+                    dst_line[dx] = src_data[cy * src_stride + cx];
+                }
+                continue;
+            }
+
+            float const u = (float)(x_prime - x0);
+            float const v = (float)(y_prime - y0);
+
+            float const wx_0 = 1.0f - u, wx_1 = u;
+            float const wy_0 = 1.0f - v, wy_1 = v;
+
+            if (x0 >= 0 && x0 + 1 < sw && y0 >= 0 && y0 + 1 < sh) {
+                uint8_t const* p_row_0 = src_data + y0 * src_stride + x0;
+                uint8_t const* p_row_1 = p_row_0 + src_stride;
+                float const r_0 = wx_0 * p_row_0[0] + wx_1 * p_row_0[1];
+                float const r_1 = wx_0 * p_row_1[0] + wx_1 * p_row_1[1];
+                float const val = wy_0 * r_0 + wy_1 * r_1;
+                int const ival = (int)std::round(val);
+                dst_line[dx] = (uint8_t)qBound(0, ival, 255);
+            } else {
+                auto fetch = [&](int const x, int const y) -> float {
+                    if (x >= 0 && x < sw && y >= 0 && y < sh) {
+                        return (float)src_data[y * src_stride + x];
+                    }
+                    if (outside_flags & OutsidePixels::COLOR) {
+                        return (float)outside_color;
+                    }
+                    int const cx = qBound(0, x, sw - 1);
+                    int const cy = qBound(0, y, sh - 1);
+                    return (float)src_data[cy * src_stride + cx];
+                };
+                float const r_0 = wx_0 * fetch(x0, y0)     + wx_1 * fetch(x0 + 1, y0);
+                float const r_1 = wx_0 * fetch(x0, y0 + 1) + wx_1 * fetch(x0 + 1, y0 + 1);
+                float const val = wy_0 * r_0 + wy_1 * r_1;
+                int const ival = (int)std::round(val);
+                dst_line[dx] = (uint8_t)qBound(0, ival, 255);
+            }
+        }
+    }
+}
+
+static void transformBilinearRGB32(
+    uint32_t const* const src_data, int const src_stride, QSize const src_size,
+    uint32_t* const dst_data, int const dst_stride,
+    QTransform const& inv_xform, QRect const& dst_rect,
+    uint32_t const outside_color, int const outside_flags)
+{
+    int const sw = src_size.width();
+    int const sh = src_size.height();
+    int const dw = dst_rect.width();
+    int const dh = dst_rect.height();
+
+    #pragma omp parallel for schedule(static) shared(inv_xform)
+    for (int dy = 0; dy < dh; ++dy) {
+        uint32_t* dst_line = dst_data + dy * dst_stride;
+        double const f_dy_center = dy + 0.5;
+        double const f_sx_base = f_dy_center * inv_xform.m21() + inv_xform.dx();
+        double const f_sy_base = f_dy_center * inv_xform.m22() + inv_xform.dy();
+
+        for (int dx = 0; dx < dw; ++dx) {
+            double const f_dx_center = dx + 0.5;
+            double const sx = f_sx_base + f_dx_center * inv_xform.m11();
+            double const sy = f_sy_base + f_dx_center * inv_xform.m12();
+
+            double const x_prime = sx - 0.5;
+            double const y_prime = sy - 0.5;
+
+            int const x0 = (int)std::floor(x_prime);
+            int const y0 = (int)std::floor(y_prime);
+
+            if (x0 < -1 || x0 >= sw || y0 < -1 || y0 >= sh) {
+                if (outside_flags & OutsidePixels::COLOR) {
+                    dst_line[dx] = outside_color;
+                } else {
+                    int const cx = qBound(0, x0, sw - 1);
+                    int const cy = qBound(0, y0, sh - 1);
+                    dst_line[dx] = src_data[cy * src_stride + cx];
+                }
+                continue;
+            }
+
+            float const u = (float)(x_prime - x0);
+            float const v = (float)(y_prime - y0);
+
+            float const wx_0 = 1.0f - u, wx_1 = u;
+            float const wy_0 = 1.0f - v, wy_1 = v;
+
+            float r_final, g_final, b_final;
+
+            if (x0 >= 0 && x0 + 1 < sw && y0 >= 0 && y0 + 1 < sh) {
+                uint32_t const* p_row_0 = src_data + y0 * src_stride + x0;
+                uint32_t const* p_row_1 = p_row_0 + src_stride;
+
+                uint32_t const c00 = p_row_0[0], c01 = p_row_0[1];
+                uint32_t const c10 = p_row_1[0], c11 = p_row_1[1];
+
+                float const r0 = wx_0 * ((c00 >> 16) & 0xFF) + wx_1 * ((c01 >> 16) & 0xFF);
+                float const g0 = wx_0 * ((c00 >> 8) & 0xFF)  + wx_1 * ((c01 >> 8) & 0xFF);
+                float const b0 = wx_0 * (c00 & 0xFF)         + wx_1 * (c01 & 0xFF);
+
+                float const r1 = wx_0 * ((c10 >> 16) & 0xFF) + wx_1 * ((c11 >> 16) & 0xFF);
+                float const g1 = wx_0 * ((c10 >> 8) & 0xFF)  + wx_1 * ((c11 >> 8) & 0xFF);
+                float const b1 = wx_0 * (c10 & 0xFF)         + wx_1 * (c11 & 0xFF);
+
+                r_final = wy_0 * r0 + wy_1 * r1;
+                g_final = wy_0 * g0 + wy_1 * g1;
+                b_final = wy_0 * b0 + wy_1 * b1;
+            } else {
+                auto fetch = [&](int const x, int const y) -> uint32_t {
+                    if (x >= 0 && x < sw && y >= 0 && y < sh) {
+                        return src_data[y * src_stride + x];
+                    }
+                    if (outside_flags & OutsidePixels::COLOR) {
+                        return outside_color;
+                    }
+                    int const cx = qBound(0, x, sw - 1);
+                    int const cy = qBound(0, y, sh - 1);
+                    return src_data[cy * src_stride + cx];
+                };
+
+                uint32_t const c00 = fetch(x0, y0),     c01 = fetch(x0 + 1, y0);
+                uint32_t const c10 = fetch(x0, y0 + 1), c11 = fetch(x0 + 1, y0 + 1);
+
+                float const r0 = wx_0 * ((c00 >> 16) & 0xFF) + wx_1 * ((c01 >> 16) & 0xFF);
+                float const g0 = wx_0 * ((c00 >> 8) & 0xFF)  + wx_1 * ((c01 >> 8) & 0xFF);
+                float const b0 = wx_0 * (c00 & 0xFF)         + wx_1 * (c01 & 0xFF);
+
+                float const r1 = wx_0 * ((c10 >> 16) & 0xFF) + wx_1 * ((c11 >> 16) & 0xFF);
+                float const g1 = wx_0 * ((c10 >> 8) & 0xFF)  + wx_1 * ((c11 >> 8) & 0xFF);
+                float const b1 = wx_0 * (c10 & 0xFF)         + wx_1 * (c11 & 0xFF);
+
+                r_final = wy_0 * r0 + wy_1 * r1;
+                g_final = wy_0 * g0 + wy_1 * g1;
+                b_final = wy_0 * b0 + wy_1 * b1;
+            }
+
+            int const ir = qBound(0, (int)std::round(r_final), 255);
+            int const ig = qBound(0, (int)std::round(g_final), 255);
+            int const ib = qBound(0, (int)std::round(b_final), 255);
+            dst_line[dx] = 0xFF000000 | (ir << 16) | (ig << 8) | ib;
+        }
+    }
+}
+
+static void transformBilinearARGB32(
+    uint32_t const* const src_data, int const src_stride, QSize const src_size,
+    uint32_t* const dst_data, int const dst_stride,
+    QTransform const& inv_xform, QRect const& dst_rect,
+    uint32_t const outside_color, int const outside_flags)
+{
+    int const sw = src_size.width();
+    int const sh = src_size.height();
+    int const dw = dst_rect.width();
+    int const dh = dst_rect.height();
+
+    #pragma omp parallel for schedule(static) shared(inv_xform)
+    for (int dy = 0; dy < dh; ++dy) {
+        uint32_t* dst_line = dst_data + dy * dst_stride;
+        double const f_dy_center = dy + 0.5;
+        double const f_sx_base = f_dy_center * inv_xform.m21() + inv_xform.dx();
+        double const f_sy_base = f_dy_center * inv_xform.m22() + inv_xform.dy();
+
+        for (int dx = 0; dx < dw; ++dx) {
+            double const f_dx_center = dx + 0.5;
+            double const sx = f_sx_base + f_dx_center * inv_xform.m11();
+            double const sy = f_sy_base + f_dx_center * inv_xform.m12();
+
+            double const x_prime = sx - 0.5;
+            double const y_prime = sy - 0.5;
+
+            int const x0 = (int)std::floor(x_prime);
+            int const y0 = (int)std::floor(y_prime);
+
+            if (x0 < -1 || x0 >= sw || y0 < -1 || y0 >= sh) {
+                if (outside_flags & OutsidePixels::COLOR) {
+                    dst_line[dx] = outside_color;
+                } else {
+                    int const cx = qBound(0, x0, sw - 1);
+                    int const cy = qBound(0, y0, sh - 1);
+                    dst_line[dx] = src_data[cy * src_stride + cx];
+                }
+                continue;
+            }
+
+            float const u = (float)(x_prime - x0);
+            float const v = (float)(y_prime - y0);
+
+            float const wx_0 = 1.0f - u, wx_1 = u;
+            float const wy_0 = 1.0f - v, wy_1 = v;
+
+            float a_final, r_final, g_final, b_final;
+
+            if (x0 >= 0 && x0 + 1 < sw && y0 >= 0 && y0 + 1 < sh) {
+                uint32_t const* p_row_0 = src_data + y0 * src_stride + x0;
+                uint32_t const* p_row_1 = p_row_0 + src_stride;
+
+                uint32_t const c00 = p_row_0[0], c01 = p_row_0[1];
+                uint32_t const c10 = p_row_1[0], c11 = p_row_1[1];
+
+                float const a0 = wx_0 * ((c00 >> 24) & 0xFF) + wx_1 * ((c01 >> 24) & 0xFF);
+                float const r0 = wx_0 * ((c00 >> 16) & 0xFF) + wx_1 * ((c01 >> 16) & 0xFF);
+                float const g0 = wx_0 * ((c00 >> 8) & 0xFF)  + wx_1 * ((c01 >> 8) & 0xFF);
+                float const b0 = wx_0 * (c00 & 0xFF)         + wx_1 * (c01 & 0xFF);
+
+                float const a1 = wx_0 * ((c10 >> 24) & 0xFF) + wx_1 * ((c11 >> 24) & 0xFF);
+                float const r1 = wx_0 * ((c10 >> 16) & 0xFF) + wx_1 * ((c11 >> 16) & 0xFF);
+                float const g1 = wx_0 * ((c10 >> 8) & 0xFF)  + wx_1 * ((c11 >> 8) & 0xFF);
+                float const b1 = wx_0 * (c10 & 0xFF)         + wx_1 * (c11 & 0xFF);
+
+                a_final = wy_0 * a0 + wy_1 * a1;
+                r_final = wy_0 * r0 + wy_1 * r1;
+                g_final = wy_0 * g0 + wy_1 * g1;
+                b_final = wy_0 * b0 + wy_1 * b1;
+            } else {
+                auto fetch = [&](int const x, int const y) -> uint32_t {
+                    if (x >= 0 && x < sw && y >= 0 && y < sh) {
+                        return src_data[y * src_stride + x];
+                    }
+                    if (outside_flags & OutsidePixels::COLOR) {
+                        return outside_color;
+                    }
+                    int const cx = qBound(0, x, sw - 1);
+                    int const cy = qBound(0, y, sh - 1);
+                    return src_data[cy * src_stride + cx];
+                };
+
+                uint32_t const c00 = fetch(x0, y0),     c01 = fetch(x0 + 1, y0);
+                uint32_t const c10 = fetch(x0, y0 + 1), c11 = fetch(x0 + 1, y0 + 1);
+
+                float const a0 = wx_0 * ((c00 >> 24) & 0xFF) + wx_1 * ((c01 >> 24) & 0xFF);
+                float const r0 = wx_0 * ((c00 >> 16) & 0xFF) + wx_1 * ((c01 >> 16) & 0xFF);
+                float const g0 = wx_0 * ((c00 >> 8) & 0xFF)  + wx_1 * ((c01 >> 8) & 0xFF);
+                float const b0 = wx_0 * (c00 & 0xFF)         + wx_1 * (c01 & 0xFF);
+
+                float const a1 = wx_0 * ((c10 >> 24) & 0xFF) + wx_1 * ((c11 >> 24) & 0xFF);
+                float const r1 = wx_0 * ((c10 >> 16) & 0xFF) + wx_1 * ((c11 >> 16) & 0xFF);
+                float const g1 = wx_0 * ((c10 >> 8) & 0xFF)  + wx_1 * ((c11 >> 8) & 0xFF);
+                float const b1 = wx_0 * (c10 & 0xFF)         + wx_1 * (c11 & 0xFF);
+
+                a_final = wy_0 * a0 + wy_1 * a1;
+                r_final = wy_0 * r0 + wy_1 * r1;
+                g_final = wy_0 * g0 + wy_1 * g1;
+                b_final = wy_0 * b0 + wy_1 * b1;
+            }
+
+            int const ia = qBound(0, (int)std::round(a_final), 255);
+            int const ir = qBound(0, (int)std::round(r_final), 255);
+            int const ig = qBound(0, (int)std::round(g_final), 255);
+            int const ib = qBound(0, (int)std::round(b_final), 255);
+            dst_line[dx] = (ia << 24) | (ir << 16) | (ig << 8) | ib;
+        }
+    }
+}
+
+static bool isUpscalingTransform(QTransform const& inv_xform)
+{
+    QPolygonF dst_poly;
+    dst_poly.push_back(QPointF(0.5, 0.0));
+    dst_poly.push_back(QPointF(1.0, 0.5));
+    dst_poly.push_back(QPointF(0.5, 1.0));
+    dst_poly.push_back(QPointF(0.0, 0.5));
+
+    QPolygonF src_poly(inv_xform.map(dst_poly));
+    std::sort(src_poly.begin(), src_poly.end(), XLess());
+    double const width = src_poly.back().x() - src_poly.front().x();
+    std::sort(src_poly.begin(), src_poly.end(), YLess());
+    double const height = src_poly.back().y() - src_poly.front().y();
+
+    return (width < 0.999 || height < 0.999);
+}
+
 } // anonymous namespace
 
 QImage transform(
     QImage const& src, QTransform const& xform,
     QRect const& dst_rect, OutsidePixels const outside_pixels,
-    QSizeF const& min_mapping_area)
+    QSizeF const& min_mapping_area,
+    UpscalingMethod upscaling_method)
 {
     if (src.isNull() || dst_rect.isEmpty()) {
         return QImage();
@@ -417,36 +1073,113 @@ QImage transform(
         throw std::invalid_argument("transform: dst_rect is invalid");
     }
 
+    if (upscaling_method == UPSCALING_AUTO) {
+        upscaling_method = defaultUpscalingMethod();
+    }
+
+    QTransform inv_xform;
+    inv_xform.translate(dst_rect.x(), dst_rect.y());
+    inv_xform *= xform.inverted();
+
+    bool const upscaling = (upscaling_method != UPSCALING_BOX) && isUpscalingTransform(inv_xform);
+
     if (src.format() == QImage::Format_Indexed8 && src.allGray()) {
-        // The palette of src may be non-standard, so we create a GrayImage,
-        // which is guaranteed to have a standard palette.
         GrayImage gray_src(src);
         GrayImage gray_dst(dst_rect.size());
-        transformGeneric<uint8_t, Gray>(
-            gray_src.data(), gray_src.stride(), src.size(),
-            gray_dst.data(), gray_dst.stride(), xform, dst_rect,
-            outside_pixels.grayLevel(), outside_pixels.flags(),
-            min_mapping_area
-        );
+
+        if (upscaling) {
+            if (upscaling_method == UPSCALING_BICUBIC_MITCHELL) {
+                transformBicubicGray<MitchellWeights>(
+                    gray_src.data(), gray_src.stride(), src.size(),
+                    gray_dst.data(), gray_dst.stride(), inv_xform, dst_rect,
+                    outside_pixels.grayLevel(), outside_pixels.flags()
+                );
+            } else if (upscaling_method == UPSCALING_BILINEAR) {
+                transformBilinearGray(
+                    gray_src.data(), gray_src.stride(), src.size(),
+                    gray_dst.data(), gray_dst.stride(), inv_xform, dst_rect,
+                    outside_pixels.grayLevel(), outside_pixels.flags()
+                );
+            } else {
+                transformBicubicGray<CatmullRomWeights>(
+                    gray_src.data(), gray_src.stride(), src.size(),
+                    gray_dst.data(), gray_dst.stride(), inv_xform, dst_rect,
+                    outside_pixels.grayLevel(), outside_pixels.flags()
+                );
+            }
+        } else {
+            transformGeneric<uint8_t, Gray>(
+                gray_src.data(), gray_src.stride(), src.size(),
+                gray_dst.data(), gray_dst.stride(), xform, dst_rect,
+                outside_pixels.grayLevel(), outside_pixels.flags(),
+                min_mapping_area
+            );
+        }
         return gray_dst;
     } else {
         if (src.hasAlphaChannel() || qAlpha(outside_pixels.rgba()) != 0xff) {
             QImage const src_argb32(src.convertToFormat(QImage::Format_ARGB32));
             QImage dst(dst_rect.size(), QImage::Format_ARGB32);
-            transformGeneric<uint32_t, ARGB32>(
-                (uint32_t const*)src_argb32.bits(), src_argb32.bytesPerLine() / 4, src_argb32.size(),
-                (uint32_t*)dst.bits(), dst.bytesPerLine() / 4, xform, dst_rect,
-                outside_pixels.rgba(), outside_pixels.flags(), min_mapping_area
-            );
+
+            if (upscaling) {
+                if (upscaling_method == UPSCALING_BICUBIC_MITCHELL) {
+                    transformBicubicARGB32<MitchellWeights>(
+                        (uint32_t const*)src_argb32.bits(), src_argb32.bytesPerLine() / 4, src_argb32.size(),
+                        (uint32_t*)dst.bits(), dst.bytesPerLine() / 4, inv_xform, dst_rect,
+                        outside_pixels.rgba(), outside_pixels.flags()
+                    );
+                } else if (upscaling_method == UPSCALING_BILINEAR) {
+                    transformBilinearARGB32(
+                        (uint32_t const*)src_argb32.bits(), src_argb32.bytesPerLine() / 4, src_argb32.size(),
+                        (uint32_t*)dst.bits(), dst.bytesPerLine() / 4, inv_xform, dst_rect,
+                        outside_pixels.rgba(), outside_pixels.flags()
+                    );
+                } else {
+                    transformBicubicARGB32<CatmullRomWeights>(
+                        (uint32_t const*)src_argb32.bits(), src_argb32.bytesPerLine() / 4, src_argb32.size(),
+                        (uint32_t*)dst.bits(), dst.bytesPerLine() / 4, inv_xform, dst_rect,
+                        outside_pixels.rgba(), outside_pixels.flags()
+                    );
+                }
+            } else {
+                transformGeneric<uint32_t, ARGB32>(
+                    (uint32_t const*)src_argb32.bits(), src_argb32.bytesPerLine() / 4, src_argb32.size(),
+                    (uint32_t*)dst.bits(), dst.bytesPerLine() / 4, xform, dst_rect,
+                    outside_pixels.rgba(), outside_pixels.flags(), min_mapping_area
+                );
+            }
             return dst;
         } else {
             QImage const src_rgb32(src.convertToFormat(QImage::Format_RGB32));
             QImage dst(dst_rect.size(), QImage::Format_RGB32);
-            transformGeneric<uint32_t, RGB32>(
-                (uint32_t const*)src_rgb32.bits(), src_rgb32.bytesPerLine() / 4, src_rgb32.size(),
-                (uint32_t*)dst.bits(), dst.bytesPerLine() / 4, xform, dst_rect,
-                outside_pixels.rgb(), outside_pixels.flags(), min_mapping_area
-            );
+
+            if (upscaling) {
+                if (upscaling_method == UPSCALING_BICUBIC_MITCHELL) {
+                    transformBicubicRGB32<MitchellWeights>(
+                        (uint32_t const*)src_rgb32.bits(), src_rgb32.bytesPerLine() / 4, src_rgb32.size(),
+                        (uint32_t*)dst.bits(), dst.bytesPerLine() / 4, inv_xform, dst_rect,
+                        outside_pixels.rgb(), outside_pixels.flags()
+                    );
+                } else if (upscaling_method == UPSCALING_BILINEAR) {
+                    transformBilinearRGB32(
+                        (uint32_t const*)src_rgb32.bits(), src_rgb32.bytesPerLine() / 4, src_rgb32.size(),
+                        (uint32_t*)dst.bits(), dst.bytesPerLine() / 4, inv_xform, dst_rect,
+                        outside_pixels.rgb(), outside_pixels.flags()
+                    );
+                } else {
+                    transformBicubicRGB32<CatmullRomWeights>(
+                        (uint32_t const*)src_rgb32.bits(), src_rgb32.bytesPerLine() / 4, src_rgb32.size(),
+                        (uint32_t*)dst.bits(), dst.bytesPerLine() / 4, inv_xform, dst_rect,
+                        outside_pixels.rgb(), outside_pixels.flags()
+                    );
+                }
+            } else {
+                transformGeneric<uint32_t, RGB32>(
+                    (uint32_t const*)src_rgb32.bits(), src_rgb32.bytesPerLine() / 4, src_rgb32.size(),
+                    (uint32_t*)dst.bits(), dst.bytesPerLine() / 4, xform, dst_rect,
+                    outside_pixels.rgb(), outside_pixels.flags(), min_mapping_area
+                );
+            }
             return dst;
         }
     }
@@ -455,7 +1188,8 @@ QImage transform(
 GrayImage transformToGray(
     QImage const& src, QTransform const& xform,
     QRect const& dst_rect, OutsidePixels const outside_pixels,
-    QSizeF const& min_mapping_area)
+    QSizeF const& min_mapping_area,
+    UpscalingMethod upscaling_method)
 {
     if (src.isNull() || dst_rect.isEmpty()) {
         return GrayImage();
@@ -469,15 +1203,47 @@ GrayImage transformToGray(
         throw std::invalid_argument("transformToGray: dst_rect is invalid");
     }
 
+    if (upscaling_method == UPSCALING_AUTO) {
+        upscaling_method = defaultUpscalingMethod();
+    }
+
+    QTransform inv_xform;
+    inv_xform.translate(dst_rect.x(), dst_rect.y());
+    inv_xform *= xform.inverted();
+
+    bool const upscaling = (upscaling_method != UPSCALING_BOX) && isUpscalingTransform(inv_xform);
+
     GrayImage const gray_src(src);
     GrayImage dst(dst_rect.size());
 
-    transformGeneric<uint8_t, Gray>(
-        gray_src.data(), gray_src.stride(), gray_src.size(),
-        dst.data(), dst.stride(), xform, dst_rect,
-        outside_pixels.grayLevel(), outside_pixels.flags(),
-        min_mapping_area
-    );
+    if (upscaling) {
+        if (upscaling_method == UPSCALING_BICUBIC_MITCHELL) {
+            transformBicubicGray<MitchellWeights>(
+                gray_src.data(), gray_src.stride(), gray_src.size(),
+                dst.data(), dst.stride(), inv_xform, dst_rect,
+                outside_pixels.grayLevel(), outside_pixels.flags()
+            );
+        } else if (upscaling_method == UPSCALING_BILINEAR) {
+            transformBilinearGray(
+                gray_src.data(), gray_src.stride(), gray_src.size(),
+                dst.data(), dst.stride(), inv_xform, dst_rect,
+                outside_pixels.grayLevel(), outside_pixels.flags()
+            );
+        } else {
+            transformBicubicGray<CatmullRomWeights>(
+                gray_src.data(), gray_src.stride(), gray_src.size(),
+                dst.data(), dst.stride(), inv_xform, dst_rect,
+                outside_pixels.grayLevel(), outside_pixels.flags()
+            );
+        }
+    } else {
+        transformGeneric<uint8_t, Gray>(
+            gray_src.data(), gray_src.stride(), gray_src.size(),
+            dst.data(), dst.stride(), xform, dst_rect,
+            outside_pixels.grayLevel(), outside_pixels.flags(),
+            min_mapping_area
+        );
+    }
 
     return dst;
 }

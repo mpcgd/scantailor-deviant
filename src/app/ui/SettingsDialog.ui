@@ -528,6 +528,17 @@ p, li { white-space: pre-wrap; }&lt;/style&gt;&lt;/head&gt;&lt;body&gt;
               </property>
              </widget>
             </item>
+            <item>
+             <widget class="QCheckBox" name="originalPageDisplayOnKeyHold">
+              <property name="text">
+               <string>Hold spacebar to display original page</string>
+              </property>
+             </widget>
+            </item>
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
            </layout>
           </widget>
          </widget>

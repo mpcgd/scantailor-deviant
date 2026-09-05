@@ -27,6 +27,8 @@ class QImage;
 class QRect;
 class QTransform;
 
+#include "UpscalingMethod.h"
+
 namespace imageproc
 {
 
@@ -125,7 +127,8 @@ private:
 QImage transform(
     QImage const& src, QTransform const& xform,
     QRect const& dst_rect, OutsidePixels outside_pixels,
-    QSizeF const& min_mapping_area = QSizeF(0.9, 0.9));
+    QSizeF const& min_mapping_area = QSizeF(0.9, 0.9),
+    UpscalingMethod upscaling_method = UPSCALING_AUTO);
 
 /**
  * \brief Apply an affine transformation to the image.
@@ -136,7 +139,8 @@ QImage transform(
 GrayImage transformToGray(
     QImage const& src, QTransform const& xform,
     QRect const& dst_rect, OutsidePixels outside_pixels,
-    QSizeF const& min_mapping_area = QSizeF(0.9, 0.9));
+    QSizeF const& min_mapping_area = QSizeF(0.9, 0.9),
+    UpscalingMethod upscaling_method = UPSCALING_AUTO);
 
 } // namespace imageproc
 

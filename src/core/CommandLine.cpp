@@ -38,6 +38,7 @@
 #include "filters/page_layout/Settings.h"
 #include "Margins.h"
 #include "Despeckle.h"
+#include "imageproc/UpscalingMethod.h"
 
 CommandLine CommandLine::m_globalInstance;
 
@@ -126,6 +127,7 @@ CommandLine::parseCli(QStringList const& argv)
     opts << "tiff-force-rgb";
     opts << "tiff-force-grayscale";
     opts << "tiff-force-keep-color-space";
+    opts << "upscaling-method";
 
     QMap<QString, QString> shortMap;
     shortMap["h"] = "help";
@@ -288,6 +290,10 @@ CommandLine::setup()
     m_pageDetectionBox = fetchPageDetectionBox();
     m_pageDetectionTolerance = fetchPageDetectionTolerance();
     m_defaultNull = fetchDefaultNull();
+    m_upscalingMethod = fetchUpscalingMethod();
+    if (!m_upscalingMethod.isEmpty()) {
+        imageproc::setDefaultUpscalingMethod(imageproc::upscalingMethodFromString(m_upscalingMethod.toStdString()));
+    }
 
     QRegularExpression exp("^.*(tif|tiff|jpg|jpeg|bmp|gif|png|pbm|pgm|ppm|xbm|xpm|pdf)$", QRegularExpression::CaseInsensitiveOption);
     // setup images
@@ -383,6 +389,7 @@ CommandLine::printHelp()
     std::cout << "\t\t--output-dpi-x=<number>" << std::endl;
     std::cout << "\t\t--output-dpi-y=<number>" << std::endl;
     std::cout << "\t--default-output-dpi=<number>\t\t-- default output dpi for pages created by split filter in gui" << std::endl;
+    std::cout << "\t--upscaling-method=<bicubic|mitchell|bilinear|box>\n\t\t\t\t\t\t-- interpolation method when upscaling (output DPI > input DPI); default: bicubic" << std::endl;
     std::cout << "\t--color-mode=<black_and_white|color_grayscale|mixed>\n\t\t\t\t\t\t-- default: black_and_white" << std::endl;
     std::cout << "\t--picture-shape=<free|rectangular>\n\t\t\t\t\t\t-- default: free" << std::endl;
     std::cout << "\t--default-color-mode=<...>\t\t-- sets default value for new images created by split filter" << std::endl;
@@ -915,4 +922,12 @@ void CommandLine::updateSettings()
 {
     CommandLine& cli = m_globalInstance;
     cli.m_defaultOutputDpi = cli.fetchDpi("default-output-dpi");
+}
+
+QString CommandLine::fetchUpscalingMethod()
+{
+    if (m_options.contains("upscaling-method")) {
+        return m_options["upscaling-method"];
+    }
+    return QString();
 }

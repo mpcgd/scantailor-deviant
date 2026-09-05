@@ -218,6 +218,9 @@ extern const bool _key_output_picture_layer_enabled_def;
 extern const char* _key_output_metadata_copy_icc;
 extern const bool _key_output_metadata_copy_icc_def;
 
+extern const char* _key_output_upscaling_method;
+extern const char* _key_output_upscaling_method_def;
+
 /* Misc */
 
 extern const char* _key_autosave_inputdir;

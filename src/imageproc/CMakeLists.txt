@@ -28,6 +28,7 @@ SET(
         OrthogonalRotation.cpp OrthogonalRotation.h
         Scale.cpp Scale.h
         Transform.cpp Transform.h
+        UpscalingMethod.cpp UpscalingMethod.h
         Morphology.cpp Morphology.h
         IntegralImage.h
         Binarize.cpp Binarize.h

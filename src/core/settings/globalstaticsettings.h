@@ -86,6 +86,7 @@ public:
     static QColor m_content_sel_content_color;
     static QColor m_content_sel_content_color_pen;
     static bool m_output_copy_icc_metadata;
+    static QString m_upscaling_method;
     static QHotKeys m_hotKeyManager;
     static int m_highlightColorAdjustment;
 

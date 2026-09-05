@@ -210,6 +210,9 @@ const bool _key_output_picture_layer_enabled_def = true;
 const char* _key_output_metadata_copy_icc = "metadata/copy_icc";
 const bool _key_output_metadata_copy_icc_def = false;
 
+const char* _key_output_upscaling_method = "output/upscaling_method";
+const char* _key_output_upscaling_method_def = "bicubic";
+
 /* Misc */
 
 const char* _key_autosave_inputdir = "auto-save_project/_inputDir";

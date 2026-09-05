@@ -250,6 +250,14 @@ public:
     {
         return contains("tiff-force-grayscale");
     }
+    bool hasUpscalingMethod() const
+    {
+        return contains("upscaling-method") && !m_options["upscaling-method"].isEmpty();
+    }
+    QString getUpscalingMethod() const
+    {
+        return m_upscalingMethod;
+    }
     bool hasTiffForceKeepColorSpace() const
     {
         return contains("tiff-force-keep-color-space");
@@ -473,10 +481,12 @@ private:
     int m_endFilterIdx;
     output::DespeckleLevel m_despeckleLevel;
     float m_matchLayoutTolerance;
+    QString m_upscalingMethod;
 
     bool parseCli(QStringList const& argv);
     void addImage(QString const& path);
     void setup();
+    QString fetchUpscalingMethod();
     page_split::LayoutType fetchLayoutType();
     output::ColorParams::ColorMode fetchColorMode();
     output::ColorParams::ColorMode fetchDefaultColorMode();
