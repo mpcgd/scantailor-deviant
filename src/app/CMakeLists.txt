@@ -94,6 +94,17 @@ ELSEIF(APPLE)
                 INSTALL_RPATH "@executable_path/../Frameworks"
                 BUILD_RPATH   "@executable_path/../Frameworks"
         )
+        IF(MuPDF_LIBRARY MATCHES "\\.dylib$")
+                # Snapshot the exact MuPDF dylib we linked against into the app
+                # bundle so that `brew upgrade mupdf` cannot break this binary.
+                ADD_CUSTOM_COMMAND(TARGET scantailor-deviant POST_BUILD
+                        COMMAND ${CMAKE_COMMAND}
+                                -DSRC_LIB=${MuPDF_LIBRARY}
+                                -DDEST_LIB=$<TARGET_FILE_DIR:scantailor-deviant>/../Frameworks/libmupdf.dylib
+                                -DBIN=$<TARGET_FILE:scantailor-deviant>
+                                -P ${PROJECT_SOURCE_DIR}/cmake/bundle_mupdf.cmake
+                )
+        ENDIF()
 ELSE()
         ADD_EXECUTABLE(
                 scantailor-deviant ${gui_only_sources} ${resource_sources} ${win32_resource_file}
